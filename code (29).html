@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <title>想法孵化器</title>
+    <!-- Supabase JS SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <!-- vis.js for network graph -->
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #f7f7f7;
+            --drawer-bg: #ffffff;
+            --text-color: #333;
+            --border-color: #ddd;
+            --accent-color: #4f46e5;
+            --danger-color: #ef4444;
+        }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0; padding: 0; 
+            background-color: var(--bg-color); color: var(--text-color);
+            overflow: hidden; /* 隱藏 body 本身的捲軸，交由 container 處理 */
+            height: 100vh;
+            height: 100dvh; /* 動態視窗高度，解決手機瀏覽器列問題 */
+        }
+        
+        /* 密碼鎖畫面 */
+        #password-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255,255,255,0.98); z-index: 9999;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+        }
+        #password-screen h2 { margin-bottom: 5px; }
+        #password-screen p { margin-top: 0; color: #666; font-size: 14px; }
+        #password-screen input {
+            padding: 12px; font-size: 16px; width: 80%; max-width: 300px; margin-bottom: 10px;
+            border: 1px solid var(--border-color); border-radius: 8px;
+        }
+        #password-screen button {
+            padding: 12px 24px; font-size: 16px; background: var(--accent-color); color: white;
+            border: none; border-radius: 8px; cursor: pointer;
+        }
+
+        /* 主體容器：卷軸滑動聚焦 */
+        #app-container {
+            height: 100dvh;
+            overflow-y: scroll;
+            scroll-snap-type: y mandatory; /* 頁面滑動吸附 */
+            scroll-behavior: smooth;
+            display: none;
+        }
+        #app-container.active { display: block; }
+        
+        .snap-section {
+            height: 100dvh;
+            scroll-snap-align: start; /* 聚焦點 */
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            border-bottom: 1px solid #eee;
+        }
+
+        /* 抽屜通用樣式 */
+        .drawer {
+            background: var(--drawer-bg);
+            border-bottom: 1px solid var(--border-color);
+            display: flex; flex-direction: column;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+            flex-shrink: 0;
+        }
+        .drawer.collapsed {
+            max-height: 45px !important; /* 強制完全收合 */
+        }
+        .drawer-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 12px 15px; cursor: pointer; background: #f0f0f0;
+            font-weight: bold; font-size: 15px; user-select: none;
+            border-bottom: 1px solid #ddd;
+        }
+        .drawer-content {
+            padding: 15px; overflow-y: auto; flex-grow: 1;
+            scrollbar-width: thin;
+        }
+        /* 允許垂直拖曳縮放 */
+        .resizable {
+            resize: vertical; 
+            overflow: auto;
+            min-height: 150px; 
+        }
+        
+        /* 元件樣式 */
+        textarea, input[type="text"] {
+            width: 100%; padding: 10px;
+            border: 1px solid #ccc; border-radius: 6px; font-size: 16px; font-family: inherit;
+        }
+        textarea { min-height: 120px; resize: none; }
+        button {
+            background: var(--accent-color); color: white; border: none;
+            padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 14px;
+            white-space: nowrap;
+        }
+        button.secondary { background: #ccc; color: #333; }
+        button.danger { background: var(--danger-color); }
+        .row { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+        .tag-input { flex-grow: 1; }
+        
+        .question-box {
+            font-style: italic; color: #555; background: #fff8e1;
+            padding: 15px; border-radius: 6px; margin-bottom: 10px; border-left: 4px solid #ffb300;
+            line-height: 1.6; font-size: 16px;
+        }
+        .note-item {
+            padding: 10px; border-bottom: 1px solid #eee; font-size: 14px; cursor: pointer;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .note-item:hover { background: #f9f9f9; }
+        
+        /* 星圖專用 */
+        #section-graph { background: #fafafa; }
+        #network-container { height: 100%; width: 100%; flex-grow: 1; }
+        .graph-hint { text-align: center; padding: 10px; font-size: 12px; color: #888; background: #f0f0f0; }
+
+        /* 管理區專用 */
+        .manage-toolbar {
+            display: flex; gap: 10px; padding: 10px; background: #fff;
+            position: sticky; top: 0; z-index: 10; border-bottom: 1px solid #ddd;
+        }
+        .manage-toolbar input { flex-grow: 1; }
+        .manage-card {
+            background: #fff; margin: 10px; padding: 15px; border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1); cursor: pointer; position: relative;
+            border-left: 4px solid transparent;
+        }
+        .manage-card.selected { border-left-color: var(--accent-color); background: #f3f4ff; }
+        .manage-card h4 { margin: 0 0 5px 0; font-size: 14px; color: #888; font-weight: normal; }
+        .manage-card p { margin: 0; font-size: 16px; line-height: 1.4; white-space: pre-wrap; word-break: break-all;}
+        .manage-card .tags { margin-top: 8px; font-size: 12px; color: #4f46e5; }
+        .card-checkbox {
+            position: absolute; top: 10px; right: 10px; width: 24px; height: 24px;
+            display: none; /* 預設隱藏，開啟多選模式才顯示 */
+        }
+        .multi-select-active .card-checkbox { display: block; }
+        
+        .batch-delete-bar {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: var(--danger-color); color: white; padding: 12px 24px;
+            border-radius: 30px; box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            display: none; cursor: pointer; z-index: 20;
+        }
+        .batch-delete-bar.show { display: block; }
+        
+        /* 輸入區 */
+        #drawer-input .drawer-content { display: flex; flex-direction: column; }
+        #content-input { flex-grow: 1; min-height: 150px; }
+    </style>
+</head>
+<body>
+
+    <!-- 密碼解鎖畫面 -->
+    <div id="password-screen">
+        <h2>🔒 歡迎來到想法孵化器</h2>
+        <p>請輸入密碼以繼續</p>
+        <input type="password" id="pwd-input" placeholder="密碼" onkeyup="if(event.key==='Enter') checkPassword()">
+        <button onclick="checkPassword()">進入</button>
+    </div>
+
+    <!-- 主體容器 -->
+    <div id="app-container">
+
+        <!-- ================= 上層：靈感孵化區 ================= -->
+        <section class="snap-section" id="section-incubator">
+            
+            <!-- 抽屜 1：蘇格拉底提問區 -->
+            <div class="drawer" id="drawer-question" style="max-height: 300px;">
+                <div class="drawer-header" onclick="toggleDrawer('drawer-question')">
+                    <span>💡 蘇格拉底提問</span>
+                    <span class="toggle-icon">▼</span>
+                </div>
+                <div class="drawer-content resizable">
+                    <div class="question-box" id="question-display">輸入標籤後，在這裡生成提問...</div>
+                    <button class="secondary" onclick="generateQuestion()">🔄 換一個問題</button>
+                </div>
+            </div>
+
+            <!-- 抽屜 2：舊筆記聯想區 -->
+            <div class="drawer" id="drawer-notes" style="max-height: 250px;">
+                <div class="drawer-header" onclick="toggleDrawer('drawer-notes')">
+                    <span>📎 舊筆記聯想</span>
+                    <span class="toggle-icon">▼</span>
+                </div>
+                <div class="drawer-content resizable" id="notes-display" style="min-height: 50px;">
+                    <div style="color:#999;">開始打字，停頓3秒後會自動搜尋舊筆記...</div>
+                </div>
+            </div>
+
+            <!-- 抽屜 3：輸入區 (完全收合) -->
+            <div class="drawer" id="drawer-input" style="flex-grow: 1; max-height: 100dvh;">
+                <div class="drawer-header" onclick="toggleDrawer('drawer-input')">
+                    <span>✍️ 寫下想法</span>
+                    <span class="toggle-icon">▼</span>
+                </div>
+                <div class="drawer-content" style="flex-grow: 1; display: flex; flex-direction: column;">
+                    <textarea id="content-input" placeholder="寫下你的跨領域聯想..." oninput="onContentTyping()" style="flex-grow: 1; min-height: 200px;"></textarea>
+                    <div class="row">
+                        <input type="text" id="tag-input" class="tag-input" placeholder="輸入標籤(逗號分隔), 如: 引力,和聲" oninput="generateQuestion()">
+                        <button onclick="saveIdea()">存檔</button>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- ================= 中層：視覺化星圖區 ================= -->
+        <section class="snap-section" id="section-graph">
+            <div class="graph-hint">使用雙指縮放與拖曳探索你的星圖</div>
+            <div id="network-container"></div>
+        </section>
+
+        <!-- ================= 下層：想法管理區 ================= -->
+        <section class="snap-section" id="section-manage">
+            <div class="manage-toolbar">
+                <input type="text" id="search-input" placeholder="搜尋想法內容或標籤..." oninput="renderManageList(this.value)">
+                <button class="secondary" onclick="toggleMultiSelect()" id="multi-select-btn">多選</button>
+            </div>
+            <div id="manage-list" style="padding-bottom: 60px;">
+                <!-- 筆記卡片由 JS 動態生成 -->
+            </div>
+        </section>
+
+    </div>
+
+    <!-- 批次刪除浮動按鈕 -->
+    <div class="batch-delete-bar" id="batch-delete-bar" onclick="batchDelete()">
+        刪除選取的 (<span id="selected-count">0</span>) 筆想法
+    </div>
+
+    <script>
+        // ==========================================
+        // 1. 參數設定區
+        // ==========================================
+        const SUPABASE_URL = '你的專案網址'; // 換成你的 Project URL
+        const SUPABASE_KEY = '你的 anon key'; // 換成你的 anon public key
+
+        // ==========================================
+        // 2. 蘇格拉底提問模板庫 (30個)
+        // ==========================================
+        const templates = [
+            "如果 `[A]` 在你的專業裡，對應的具體動作是什麼？",
+            "如果要把 `[A]` 從零開始建構，第一步會是什麼？",
+            "`[A]` 有沒有一個臨界點，超過它之後性質就變了？",
+            "如果 `[A]` 完全消失，你正在描述的東西還成立嗎？",
+            "`[A]` 是你主動製造的，還是它自己產生的？",
+            "`[A]` 放大到極致和縮小到極致，分別是什麼樣子？",
+            "如果用三個形容詞描述 `[A]` 的本質，你會選哪三個？",
+            "`[A]` 在什麼情況下會變成它的反面？",
+            "`[A]` 的速度和方向，哪一個更重要？",
+            "如果把 `[A]` 教給一個 10 歲的孩子，你會用什麼比喻？",
+            "如果 `[A]` 對應到 `[B]`，那 `[A]` 是指具體感受，還是抽象結構？",
+            "一定是 `[A]` 造成了 `[B]` 嗎？會不會是 `[B]` 迫使了 `[A]`？",
+            "`[A]` 有『質量』和『距離』，在 `[B]` 裡，誰是質量？誰是距離？",
+            "如果 `[A]` 會造成加速度，這在 `[B]` 裡表現在節奏上還是力度上？",
+            "如果 `[A]` 強度無限大，`[B]` 會是完全的不和諧，還是純粹的共鳴？",
+            "有沒有哪種極端情況下，`[A]` 反而會失去對 `[B]` 的作用力？",
+            "如果要把 `[A]` 與 `[B]` 的關係教給初學者，你會用什麼動作讓他感受到？",
+            "如果 `[A]` 聽起來有一種顏色，`[B]` 會是什麼顏色？",
+            "如果把 `[A]` 的感覺轉換成觸覺，那是摩擦力變大，還是重量變重？",
+            "如果把 `[A]` 抽掉時間維度，`[B]` 還成立嗎？",
+            "`[A]` 可以拆成哪兩個更小的元素？哪一個對 `[B]` 更直接？",
+            "會不會有第三個隱藏因素同時影響了 `[A]` 和 `[B]`？",
+            "如果把 `[B]` 放慢 100 倍，`[A]` 會變成什麼狀態？",
+            "如果一秒內完成 `[B]`，`[A]` 還存在嗎？",
+            "如果是 `[B]` 主動吸引你的 `[A]`，而不是你主動製造 `[A]`，執行上會是什麼感覺？",
+            "`[A]`、`[B]`、`[C]` 三者之間，誰是因，誰是果，誰是旁觀者？",
+            "如果拿掉 `[C]`，`[A]` 和 `[B]` 之間的關係會怎麼變？",
+            "`[A]` 到 `[B]` 的距離，跟 `[B]` 到 `[C]` 的距離，哪個更近？",
+            "`[A]`、`[B]`、`[C]` 如果是一個三角形，哪一個角是鈍角？",
+            "如果這三個是同一件事的三個面，那本體是什麼？"
+        ];
+        let usedTemplateIndices = [];
+
+        // ==========================================
+        // 3. Supabase 初始化與全域變數
+        // ==========================================
+        let supabaseClient;
+        let allIdeas = []; 
+        let isMultiSelectMode = false;
+        let selectedIdeas = new Set();
+
+        // ==========================================
+        // 4. 密碼鎖邏輯
+        // ==========================================
+        async function checkPassword() {
+            const input = document.getElementById('pwd-input').value;
+            if (!input) return;
+            
+            const { data, error } = await supabaseClient.rpc('check_app_password', { input_pass: input });
+            if (error) { alert('驗證錯誤: ' + error.message); return; }
+
+            if (data === true) {
+                localStorage.setItem('app_login_time', Date.now().toString());
+                document.getElementById('password-screen').style.display = 'none';
+                document.getElementById('app-container').classList.add('active');
+                fetchIdeasAndDrawGraph();
+                renderManageList();
+            } else {
+                alert('密碼錯誤！');
+            }
+        }
+
+        function checkAutoLogin() {
+            const loginTime = localStorage.getItem('app_login_time');
+            if (loginTime) {
+                if (Date.now() - parseInt(loginTime) < 86400000) { // 1天內
+                    document.getElementById('password-screen').style.display = 'none';
+                    document.getElementById('app-container').classList.add('active');
+                    return true;
+                } else {
+                    localStorage.removeItem('app_login_time');
+                }
+            }
+            return false;
+        }
+
+        // ==========================================
+        // 5. CRUD: 讀取與存檔
+        // ==========================================
+        async function fetchIdeasAndDrawGraph() {
+            const { data, error } = await supabaseClient
+                .from('ideas').select('*').order('created_at', { ascending: false });
+            if (error) { console.error('讀取失敗:', error); return; }
+            allIdeas = data || [];
+            drawGraph(allIdeas);
+            renderManageList(document.getElementById('search-input').value);
+        }
+
+        async function saveIdea() {
+            const content = document.getElementById('content-input').value.trim();
+            const tags = document.getElementById('tag-input').value.trim();
+            const currentQuestion = document.getElementById('question-display').innerText;
+
+            if (!content) { alert('想法內容不能為空！'); return; }
+
+            const { data, error } = await supabaseClient
+                .from('ideas').insert([{ content, tags, generated_question: currentQuestion }]).select();
+
+            if (error) { alert('存檔失敗:' + error.message); } 
+            else {
+                alert('存檔成功！');
+                document.getElementById('content-input').value = '';
+                document.getElementById('tag-input').value = '';
+                document.getElementById('question-display').innerText = '輸入標籤後，在這裡生成提問...';
+                usedTemplateIndices = [];
+                if (data && data.length > 0) {
+                    allIdeas.unshift(data[0]);
+                    drawGraph(allIdeas);
+                    renderManageList();
+                }
+            }
+        }
+
+        // ==========================================
+        // 6. 提問模板生成邏輯
+        // ==========================================
+        function generateQuestion() {
+            const tagsRaw = document.getElementById('tag-input').value;
+            const tags = tagsRaw.split(',').map(t => t.trim()).filter(t => t.length > 0);
+            if (tags.length === 0) { document.getElementById('question-display').innerText = '請先輸入標籤...'; return; }
+
+            let availableIndices = [];
+            if (tags.length === 1) availableIndices = [...Array(10).keys()]; 
+            else if (tags.length === 2) availableIndices = [...Array(15).keys()].map(i => i + 10); 
+            else { availableIndices = [...Array(5).keys()].map(i => i + 25); availableIndices = availableIndices.concat([...Array(15).keys()].map(i => i + 10)); }
+
+            let usableIndices = availableIndices.filter(i => !usedTemplateIndices.includes(i));
+            if (usableIndices.length === 0) {
+                usedTemplateIndices = usedTemplateIndices.filter(i => availableIndices.includes(i));
+                usableIndices = availableIndices;
+            }
+            const randomIndex = usableIndices[Math.floor(Math.random() * usableIndices.length)];
+            usedTemplateIndices.push(randomIndex);
+
+            let questionText = templates[randomIndex];
+            if (tags.length >= 3) {
+                questionText = questionText.replace('`[A]`', `<b>${tags[0]}</b>`).replace('`[B]`', `<b>${tags[1]}</b>`).replace('`[C]`', `<b>${tags[2]}</b>`);
+            } else if (tags.length === 2) {
+                questionText = questionText.replace('`[A]`', `<b>${tags[0]}</b>`).replace('`[B]`', `<b>${tags[1]}</b>`);
+            } else {
+                questionText = questionText.replace('`[A]`', `<b>${tags[0]}</b>`);
+            }
+            document.getElementById('question-display').innerHTML = questionText;
+        }
+
+        // ==========================================
+        // 7. 舊筆記聯想邏輯
+        // ==========================================
+        let typingTimer;
+        function onContentTyping() {
+            clearTimeout(typingTimer);
+            const notesDisplay = document.getElementById('notes-display');
+            notesDisplay.innerHTML = '<div style="color:#999;">搜尋中...</div>';
+            typingTimer = setTimeout(() => {
+                const currentText = document.getElementById('content-input').value;
+                if (currentText.trim().length < 2) {
+                    notesDisplay.innerHTML = '<div style="color:#999;">開始打字，停頓3秒後會自動搜尋舊筆記...</div>';
+                    return;
+                }
+                searchOldNotes(currentText);
+            }, 3000); 
+        }
+
+        function searchOldNotes(text) {
+            const keywords = text.split(/[\s,，。、]+/).filter(k => k.length > 1);
+            if (keywords.length === 0 && !text.trim()) return;
+            const matchedNotes = [];
+            allIdeas.forEach(idea => {
+                let isMatch = false;
+                keywords.forEach(kw => {
+                    if ((idea.content && idea.content.includes(kw)) || (idea.tags && idea.tags.includes(kw))) isMatch = true;
+                });
+                if (isMatch && !matchedNotes.find(n => n.id === idea.id)) matchedNotes.push(idea);
+            });
+
+            const notesDisplay = document.getElementById('notes-display');
+            if (matchedNotes.length === 0) {
+                notesDisplay.innerHTML = '<div style="color:#999;">沒有找到相關的舊筆記。</div>';
+            } else {
+                let html = '<button class="secondary" onclick="searchOldNotes(document.getElementById(\'content-input\').value)" style="margin-bottom:10px;">🔄 重新搜尋</button>';
+                matchedNotes.slice(0, 10).forEach(note => {
+                    const preview = note.content.substring(0, 50) + '...';
+                    const safeContent = note.content.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                    html += `<div class="note-item" onclick="alert('${safeContent}')">${preview}</div>`;
+                });
+                notesDisplay.innerHTML = html;
+            }
+        }
+
+        // ==========================================
+        // 8. 抽屜開闔邏輯
+        // ==========================================
+        function toggleDrawer(id) {
+            const drawer = document.getElementById(id);
+            drawer.classList.toggle('collapsed');
+            const icon = drawer.querySelector('.toggle-icon');
+            if (drawer.classList.contains('collapsed')) {
+                icon.innerText = '▶';
+                drawer.style.maxHeight = '45px';
+            } else {
+                icon.innerText = '▼';
+                drawer.style.maxHeight = '100dvh'; // 展開時允許撐開
+            }
+        }
+
+        // ==========================================
+        // 9. Vis.js 視覺化星圖邏輯
+        // ==========================================
+        let network = null;
+        function drawGraph(ideas) {
+            const container = document.getElementById('network-container');
+            if (!container) return;
+
+            let nodes = [];
+            let edges = [];
+            let tagNodes = new Map(); 
+            
+            ideas.forEach(idea => {
+                nodes.push({ id: idea.id, label: idea.content.substring(0, 10) + '...', shape: 'box', color: '#a8e6cf', title: idea.content });
+                if (idea.tags) {
+                    const tags = idea.tags.split(',').map(t => t.trim()).filter(t => t.length > 0);
+                    tags.forEach(tag => {
+                        if (!tagNodes.has(tag)) {
+                            const tagId = 'tag-' + tag;
+                            tagNodes.set(tag, tagId);
+                            nodes.push({ id: tagId, label: tag, shape: 'circle', color: '#ffd3b6' });
+                        }
+                        edges.push({ from: idea.id, to: tagNodes.get(tag) });
+                    });
+                }
+            });
+
+            // 優化：開啟雙指縮放與拖曳
+            const options = {
+                interaction: {
+                    zoomView: true, // 允許縮放
+                    dragView: true, // 允許拖曳畫面
+                    dragNodes: true, // 允許拖曳節點
+                    hover: true
+                },
+                physics: { stabilization: false, barnesHut: { gravitationalConstant: -2000, springLength: 100 } },
+                nodes: { font: { size: 12 } },
+                edges: { width: 1, color: '#cccccc' }
+            };
+
+            if (network === null) {
+                network = new vis.Network(container, { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) }, options);
+            } else {
+                network.setData({ nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) });
+            }
+        }
+
+        // 當滑動到星圖區時，觸發 vis.js 重新計算大小
+        const graphObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting && network) {
+                    network.redraw();
+                }
+            });
+        }, { threshold: 0.5 });
+        const graphSection = document.getElementById('section-graph');
+        if (graphSection) graphObserver.observe(graphSection);
+
+
+        // ==========================================
+        // 10. 想法管理區邏輯 (搜尋、多選、刪除)
+        // ==========================================
+        function renderManageList(filterText = "") {
+            const listContainer = document.getElementById('manage-list');
+            listContainer.innerHTML = '';
+
+            const filteredIdeas = allIdeas.filter(idea => {
+                if (!filterText) return true;
+                return (idea.content && idea.content.includes(filterText)) || 
+                       (idea.tags && idea.tags.includes(filterText)) ||
+                       (idea.generated_question && idea.generated_question.includes(filterText));
+            });
+
+            if (filteredIdeas.length === 0) {
+                listContainer.innerHTML = '<div style="text-align:center; color:#999; padding:20px;">沒有符合的想法。</div>';
+                return;
+            }
+
+            filteredIdeas.forEach(idea => {
+                const card = document.createElement('div');
+                card.className = 'manage-card';
+                if (selectedIdeas.has(idea.id)) card.classList.add('selected');
+                if (isMultiSelectMode) card.classList.add('multi-select-active');
+
+                const dateStr = new Date(idea.created_at).toLocaleString();
+                let tagsHtml = idea.tags ? `<div class="tags">標籤: ${idea.tags}</div>` : '';
+                
+                card.innerHTML = `
+                    <input type="checkbox" class="card-checkbox" ${selectedIdeas.has(idea.id) ? 'checked' : ''} onchange="toggleSelect('${idea.id}')">
+                    <h4>${dateStr}</h4>
+                    <p>${idea.content}</p>
+                    ${tagsHtml}
+                `;
+                
+                // 如果是多選模式，點擊卡片切換選取；非多選模式，點擊展開
+                card.onclick = function(e) {
+                    if (e.target.type === 'checkbox') return; // 點擊 checkbox 本身不重複觸發
+                    if (isMultiSelectMode) {
+                        toggleSelect(idea.id);
+                    } else {
+                        alert(idea.content);
+                    }
+                };
+                listContainer.appendChild(card);
+            });
+        }
+
+        function toggleMultiSelect() {
+            isMultiSelectMode = !isMultiSelectMode;
+            selectedIdeas.clear(); // 切換模式時清空選取
+            const btn = document.getElementById('multi-select-btn');
+            if (isMultiSelectMode) {
+                btn.innerText = '取消多選';
+                btn.classList.add('danger');
+            } else {
+                btn.innerText = '多選';
+                btn.classList.remove('danger');
+            }
+            renderManageList(document.getElementById('search-input').value);
+            updateBatchBar();
+        }
+
+        function toggleSelect(id) {
+            if (selectedIdeas.has(id)) {
+                selectedIdeas.delete(id);
+            } else {
+                selectedIdeas.add(id);
+            }
+            renderManageList(document.getElementById('search-input').value); // 重新渲染以更新背景色
+            updateBatchBar();
+        }
+
+        function updateBatchBar() {
+            const bar = document.getElementById('batch-delete-bar');
+            document.getElementById('selected-count').innerText = selectedIdeas.size;
+            if (selectedIdeas.size > 0 && isMultiSelectMode) {
+                bar.classList.add('show');
+            } else {
+                bar.classList.remove('show');
+            }
+        }
+
+        async function batchDelete() {
+            if (!confirm(`確定要刪除選取的 ${selectedIdeas.size} 筆想法嗎？`)) return;
+            
+            const idsToDelete = Array.from(selectedIdeas);
+            const { error } = await supabaseClient.from('ideas').delete().in('id', idsToDelete);
+
+            if (error) {
+                alert('刪除失敗: ' + error.message);
+            } else {
+                allIdeas = allIdeas.filter(idea => !selectedIdeas.has(idea.id));
+                selectedIdeas.clear();
+                toggleMultiSelect(); // 退出多選模式
+                drawGraph(allIdeas);
+                renderManageList();
+                alert('刪除成功！');
+            }
+        }
+
+        // ==========================================
+        // 11. 頁面載入初始化
+        // ==========================================
+        window.onload = function() {
+            supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+            if (!checkAutoLogin()) {
+                document.getElementById('password-screen').style.display = 'flex';
+            } else {
+                fetchIdeasAndDrawGraph();
+                renderManageList();
+            }
+        };
+    </script>
+</body>
+</html>
