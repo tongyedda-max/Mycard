@@ -120,6 +120,38 @@
         .note-item:hover { background: #f9f9f9; }
         
         /* 星圖專用 */
+                /* 浮動導航按鈕 */
+        .nav-buttons {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 15px;
+            z-index: 15;
+        }
+        .nav-buttons button {
+            background: rgba(79, 70, 229, 0.9);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            font-size: 24px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .nav-buttons button:active {
+            background: rgba(79, 70, 229, 1);
+        }
+        /* 讓 section 可以放置 absolute 按鈕 */
+        .snap-section {
+            position: relative;
+        }
+
         #section-graph { background: #fafafa; }
         #network-container { height: 100%; width: 100%; flex-grow: 1; }
         .graph-hint { text-align: center; padding: 10px; font-size: 12px; color: #888; background: #f0f0f0; }
@@ -211,16 +243,30 @@
                     </div>
                 </div>
             </div>
+            <div class="nav-buttons" style="bottom: 10px;">
+                <button onclick="scrollToSection('section-graph')">↓</button>
+            </div>
 
         </section>
 
-        <!-- ================= 中層：視覺化星圖區 ================= -->
+                <!-- ================= 中層：視覺化星圖區 ================= -->
         <section class="snap-section" id="section-graph">
             <div class="graph-hint">使用雙指縮放與拖曳探索你的星圖</div>
             <div id="network-container"></div>
+            
+            <!-- 導航按鈕 -->
+            <div class="nav-buttons">
+                <button onclick="scrollToSection('section-incubator')">↑</button>
+                <button onclick="scrollToSection('section-manage')">↓</button>
+            </div>
         </section>
 
+
         <!-- ================= 下層：想法管理區 ================= -->
+                    <div class="nav-buttons" style="bottom: auto; top: 60px;">
+                <button onclick="scrollToSection('section-graph')">↑</button>
+            </div>
+
         <section class="snap-section" id="section-manage">
             <div class="manage-toolbar">
                 <input type="text" id="search-input" placeholder="搜尋想法內容或標籤..." oninput="renderManageList(this.value)">
@@ -611,6 +657,21 @@
                 drawGraph(allIdeas);
                 renderManageList();
                 alert('刪除成功！');
+            }
+        }
+        // ==========================================
+        // 區塊導航邏輯
+        // ==========================================
+        function scrollToSection(sectionId) {
+            const target = document.getElementById(sectionId);
+            const container = document.getElementById('app-container');
+            if (target && container) {
+                // 計算目標區塊在 container 中的頂部偏移量
+                const targetTop = target.offsetTop;
+                container.scrollTo({
+                    top: targetTop,
+                    behavior: 'smooth' // 平滑捲動
+                });
             }
         }
 
